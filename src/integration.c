@@ -86,6 +86,7 @@ static void process_menuItem(char *);
 static void process_toolbarButton(char *);
 static void workshop_set_option_first(char *name, char *value);
 
+static size_t dummy;  /* to ignore return value of write() */
 
 #define CMDBUFSIZ	2048
 
@@ -183,7 +184,7 @@ messageFromEserve(XtPointer clientData UNUSED,
 			ackNum = atoi(&cmd[4]);
 			vim_snprintf(buf, sizeof(buf),
 					       NOCATGETS("ack %d\n"), ackNum);
-			write(sd, buf, strlen(buf));
+			dummy = write(sd, buf, strlen(buf));
 		} else if (strncmp(cmd,
 		    NOCATGETS("addMarkType "), 12) == 0) {
 			int idx;
@@ -280,7 +281,7 @@ messageFromEserve(XtPointer clientData UNUSED,
 			vim_snprintf(buf, sizeof(buf),
 					     NOCATGETS("markLine %s %d %d\n"),
 			    file, markid, line);
-			write(sd, buf, strlen(buf));
+			dummy = write(sd, buf, strlen(buf));
 		} else if (cmd[1] == 'o' && cmd[4] == 'L' &&
 		    strncmp(cmd, NOCATGETS("gotoLine "), 9) == 0) {
 			char *file;
@@ -391,7 +392,7 @@ messageFromEserve(XtPointer clientData UNUSED,
 
 			pingNum = atoi(&cmd[5]);
 			workshop_send_ack(ackNum);
-			WHAT DO I DO HERE?
+			/* WHAT DO I DO HERE? */
 #endif
 		}
 		HANDLE_ERRORS(cmd);
@@ -662,7 +663,7 @@ void	workshop_connect(XtAppContext context)
 
 	/* Get the server internet address and put into addr structure */
 	/* fill in the socket address structure and connect to server */
-	memset((char *)&server, '\0', sizeof(server));
+	vim_memset((char *)&server, '\0', sizeof(server));
 	server.sin_family = AF_INET;
 	server.sin_port = port;
 	if ((host = gethostbyname(NOCATGETS("localhost"))) == NULL) {
@@ -729,10 +730,10 @@ void	workshop_connect(XtAppContext context)
 		workshop_get_editor_name(),
 		PROTOCOL_VERSION,
 		workshop_get_editor_version());
-	write(sd, buf, strlen(buf));
+	dummy = write(sd, buf, strlen(buf));
 
 	vim_snprintf(buf, sizeof(buf), NOCATGETS("ack 1\n"));
-	write(sd, buf, strlen(buf));
+	dummy = write(sd, buf, strlen(buf));
 }
 
 void	workshop_disconnect()
@@ -753,51 +754,6 @@ void	workshop_disconnect()
  * Utility functions
  */
 
-#if 0
-/* Set icon for the window */
-void
-workshop_set_icon(Display *display, Widget shell, char **xpmdata,
-		  int width, int height)
-{
-	Pixel		bgPixel;
-	XpmAttributes   xpmAttributes;
-	XSetWindowAttributes attr;
-	Window		iconWindow;
-	int		depth;
-	int		screenNum;
-	Pixmap		pixmap;
-
-	/* Create the pixmap/icon window which is shown when you
-	 * iconify the sccs viewer
-	 * This code snipped was adapted from Sun WorkShop's source base,
-	 * setIcon.cc.
-	 */
-	XtVaGetValues(shell, XmNbackground, &bgPixel, NULL);
-	screenNum = XScreenNumberOfScreen(XtScreen(shell));
-	depth = DisplayPlanes(display, screenNum);
-	xpmAttributes.valuemask = XpmColorSymbols;
-	xpmAttributes.numsymbols = 1;
-	xpmAttributes.colorsymbols =
-	    (XpmColorSymbol *)XtMalloc(sizeof (XpmColorSymbol) *
-	    xpmAttributes.numsymbols);
-	xpmAttributes.colorsymbols[0].name = NOCATGETS("BgColor");
-	xpmAttributes.colorsymbols[0].value = NULL;
-	xpmAttributes.colorsymbols[0].pixel = bgPixel;
-	if (XpmCreatePixmapFromData(display,
-	    RootWindow(display, screenNum), xpmdata, &pixmap,
-	    NULL, &xpmAttributes) >= 0) {
-		attr.background_pixmap = pixmap;
-		iconWindow = XCreateWindow(display, RootWindow(display,
-		    screenNum), 0, 0, width, height, 0, depth,
-				(unsigned int)CopyFromParent,
-		    CopyFromParent, CWBackPixmap, &attr);
-
-		XtVaSetValues(shell,
-		    XtNiconWindow, iconWindow, NULL);
-	}
-	XtFree((char *)xpmAttributes.colorsymbols);
-}
-#endif
 
 /* Minimize and maximize shells. From libutil's shell.cc. */
 
@@ -932,39 +888,6 @@ Boolean workshop_get_width_height(int *width, int *height)
 	return success;
 }
 
-#if 0
-Boolean workshop_get_rows_cols(int *rows, int *cols)
-{
-	static int	r = 0;
-	static int	c = 0;
-	static Boolean	firstTime = True;
-	static Boolean	success = False;
-
-	if (firstTime) {
-		char	*settings;
-
-		settings = getenv(NOCATGETS("SPRO_GUI_ROWS_COLS"));
-		if (settings != NULL) {
-			r = atoi(settings);
-			settings = strrchr(settings, ':');
-			if (settings++ != NULL) {
-				c = atoi(settings);
-			}
-			if (r > 0 && c > 0) {
-				success = True;
-			}
-			firstTime = False;
-		}
-	}
-
-	if (success) {
-		*rows = r;
-		*cols = c;
-	}
-	return success;
-}
-#endif
-
 /*
  * Toolbar code
  */
@@ -1049,26 +972,12 @@ void workshop_set_option_first(char *name, char *value)
 }
 
 
-#if 0
-/*
- * Send information to eserve on certain editor events
- * You must make sure these are called when necessary
- */
-void workshop_file_closed(char *filename)
-{
-	char buffer[2*MAXPATHLEN];
-	vim_snprintf(buffer, sizeof(buffer),
-			NOCATGETS("deletedFile %s\n"), filename);
-	write(sd, buffer, strlen(buffer));
-}
-#endif
-
 void workshop_file_closed_lineno(char *filename, int lineno)
 {
 	char buffer[2*MAXPATHLEN];
 	vim_snprintf(buffer, sizeof(buffer),
 			NOCATGETS("deletedFile %s %d\n"), filename, lineno);
-	write(sd, buffer, strlen(buffer));
+	dummy = write(sd, buffer, strlen(buffer));
 }
 
 void workshop_file_opened(char *filename, int readOnly)
@@ -1076,7 +985,7 @@ void workshop_file_opened(char *filename, int readOnly)
 	char buffer[2*MAXPATHLEN];
 	vim_snprintf(buffer, sizeof(buffer),
 			NOCATGETS("loadedFile %s %d\n"), filename, readOnly);
-	write(sd, buffer, strlen(buffer));
+	dummy = write(sd, buffer, strlen(buffer));
 }
 
 
@@ -1085,30 +994,12 @@ void workshop_file_saved(char *filename)
 	char buffer[2*MAXPATHLEN];
 	vim_snprintf(buffer, sizeof(buffer),
 			NOCATGETS("savedFile %s\n"), filename);
-	write(sd, buffer, strlen(buffer));
+	dummy = write(sd, buffer, strlen(buffer));
 
 	/* Let editor report any moved marks that the eserve client
 	 * should deal with (for example, moving location-based breakpoints) */
 	workshop_moved_marks(filename);
 }
-
-#if 0
-void workshop_file_modified(char *filename)
-{
-	char buffer[2*MAXPATHLEN];
-	vim_snprintf(buffer, sizeof(buffer),
-			NOCATGETS("modifiedFile %s\n"), filename);
-	write(sd, buffer, strlen(buffer));
-}
-
-void workshop_move_mark(char *filename, int markId, int newLineno)
-{
-	char buffer[2*MAXPATHLEN];
-	vim_snprintf(buffer, sizeof(buffer),
-	       NOCATGETS("moveMark %s %d %d\n"), filename, markId, newLineno);
-	write(sd, buffer, strlen(buffer));
-}
-#endif
 
 void workshop_frame_moved(int new_x, int new_y, int new_w, int new_h)
 {
@@ -1119,7 +1010,7 @@ void workshop_frame_moved(int new_x, int new_y, int new_w, int new_h)
 		vim_snprintf(buffer, sizeof(buffer),
 				NOCATGETS("frameAt %d %d %d %d\n"),
 				new_x, new_y, new_w, new_h);
-		write(sd, buffer, strlen(buffer));
+		dummy = write(sd, buffer, strlen(buffer));
 	}
 }
 
@@ -1179,7 +1070,7 @@ void workshop_perform_verb(char *verb, void *clientData)
 			selEndLine, selEndCol,
 			selLength,
 			selection);
-		write(sd, buf, strlen(buf));
+		dummy = write(sd, buf, strlen(buf));
 		if (*selection) {
 			free(selection);
 		}
@@ -1190,7 +1081,7 @@ void workshop_perform_verb(char *verb, void *clientData)
 #if defined(NOHANDS_SUPPORT_FUNCTIONS) || defined(FEAT_BEVAL)
 void workshop_send_message(char *buf)
 {
-	write(sd, buf, strlen(buf));
+	dummy = write(sd, buf, strlen(buf));
 }
 #endif
 

@@ -129,8 +129,12 @@ static int	getargopt __ARGS((exarg_T *eap));
 static int	check_more __ARGS((int, int));
 static linenr_T get_address __ARGS((char_u **, int skip, int to_other_file));
 static void	get_flags __ARGS((exarg_T *eap));
-#if !defined(FEAT_PERL) || !defined(FEAT_PYTHON) || !defined(FEAT_TCL) \
-	|| !defined(FEAT_RUBY) || !defined(FEAT_MZSCHEME)
+#if !defined(FEAT_PERL) \
+	|| !defined(FEAT_PYTHON) || !defined(FEAT_PYTHON3) \
+	|| !defined(FEAT_TCL) \
+	|| !defined(FEAT_RUBY) \
+	|| !defined(FEAT_LUA) \
+	|| !defined(FEAT_MZSCHEME)
 # define HAVE_EX_SCRIPT_NI
 static void	ex_script_ni __ARGS((exarg_T *eap));
 #endif
@@ -235,6 +239,7 @@ static void	ex_popup __ARGS((exarg_T *eap));
 #endif
 #ifndef FEAT_SYN_HL
 # define ex_syntax		ex_ni
+# define ex_ownsyntax		ex_ni
 #endif
 #ifndef FEAT_SPELL
 # define ex_spell		ex_ni
@@ -242,6 +247,15 @@ static void	ex_popup __ARGS((exarg_T *eap));
 # define ex_spelldump		ex_ni
 # define ex_spellinfo		ex_ni
 # define ex_spellrepall		ex_ni
+#endif
+#ifndef FEAT_PERSISTENT_UNDO
+# define ex_rundo		ex_ni
+# define ex_wundo		ex_ni
+#endif
+#ifndef FEAT_LUA
+# define ex_lua			ex_script_ni
+# define ex_luado		ex_ni
+# define ex_luafile		ex_ni
 #endif
 #ifndef FEAT_MZSCHEME
 # define ex_mzscheme		ex_script_ni
@@ -254,6 +268,10 @@ static void	ex_popup __ARGS((exarg_T *eap));
 #ifndef FEAT_PYTHON
 # define ex_python		ex_script_ni
 # define ex_pyfile		ex_ni
+#endif
+#ifndef FEAT_PYTHON3
+# define ex_py3			ex_script_ni
+# define ex_py3file		ex_ni
 #endif
 #ifndef FEAT_TCL
 # define ex_tcl			ex_script_ni
@@ -298,6 +316,10 @@ static void	ex_join __ARGS((exarg_T *eap));
 static void	ex_at __ARGS((exarg_T *eap));
 static void	ex_bang __ARGS((exarg_T *eap));
 static void	ex_undo __ARGS((exarg_T *eap));
+#ifdef FEAT_PERSISTENT_UNDO
+static void	ex_wundo __ARGS((exarg_T *eap));
+static void	ex_rundo __ARGS((exarg_T *eap));
+#endif
 static void	ex_redo __ARGS((exarg_T *eap));
 static void	ex_later __ARGS((exarg_T *eap));
 static void	ex_redir __ARGS((exarg_T *eap));
@@ -439,7 +461,9 @@ static void	ex_folddo __ARGS((exarg_T *eap));
 # define ex_wsverb		ex_ni
 #endif
 #ifndef FEAT_NETBEANS_INTG
+# define ex_nbclose		ex_ni
 # define ex_nbkey		ex_ni
+# define ex_nbstart		ex_ni
 #endif
 
 #ifndef FEAT_EVAL
@@ -837,7 +861,7 @@ do_cmdline(cmdline, getline, cookie, flags)
     if (flags & DOCMD_EXCRESET)
 	save_dbg_stuff(&debug_saved);
     else
-	memset(&debug_saved, 0, 1);
+	vim_memset(&debug_saved, 0, 1);
 
     initial_trylevel = trylevel;
 
@@ -2532,11 +2556,14 @@ do_one_cmd(cmdlinep, sourcing,
 	    case CMD_leftabove:
 	    case CMD_let:
 	    case CMD_lockmarks:
+	    case CMD_lua:
 	    case CMD_match:
 	    case CMD_mzscheme:
 	    case CMD_perl:
 	    case CMD_psearch:
 	    case CMD_python:
+	    case CMD_py3:
+	    case CMD_python3:
 	    case CMD_return:
 	    case CMD_rightbelow:
 	    case CMD_ruby:
@@ -2799,6 +2826,11 @@ find_command(eap, full)
     {
 	while (ASCII_ISALPHA(*p))
 	    ++p;
+	/* for python 3.x support ":py3", ":python3", ":py3file", etc. */
+	if (eap->cmd[0] == 'p' && eap->cmd[1] == 'y')
+	    while (ASCII_ISALNUM(*p))
+		++p;
+
 	/* check for non-alpha command */
 	if (p == eap->cmd && vim_strchr((char_u *)"@*!=><&~#", *p) != NULL)
 	    ++p;
@@ -3391,17 +3423,16 @@ set_one_cmd_context(xp, buff)
 	    xp->xp_pattern = bow;
 	xp->xp_context = EXPAND_FILES;
 
-#ifndef BACKSLASH_IN_FILENAME
 	/* For a shell command more chars need to be escaped. */
 	if (usefilter || ea.cmdidx == CMD_bang)
 	{
+#ifndef BACKSLASH_IN_FILENAME
 	    xp->xp_shell = TRUE;
-
+#endif
 	    /* When still after the command name expand executables. */
 	    if (xp->xp_pattern == skipwhite(arg))
 		xp->xp_context = EXPAND_SHELLCMD;
 	}
-#endif
 
 	/* Check for environment variable */
 	if (*xp->xp_pattern == '$'
@@ -3431,6 +3462,12 @@ set_one_cmd_context(xp, buff)
  */
     switch (ea.cmdidx)
     {
+	case CMD_find:
+	case CMD_sfind:
+	case CMD_tabfind:
+	    if (xp->xp_context == EXPAND_FILES)
+		xp->xp_context = EXPAND_FILES_IN_PATH;
+	    break;
 	case CMD_cd:
 	case CMD_chdir:
 	case CMD_lcd:
@@ -3749,26 +3786,28 @@ set_one_cmd_context(xp, buff)
 	case CMD_omap:	    case CMD_onoremap:
 	case CMD_imap:	    case CMD_inoremap:
 	case CMD_cmap:	    case CMD_cnoremap:
+	case CMD_lmap:	    case CMD_lnoremap:
 	    return set_context_in_map_cmd(xp, cmd, arg, forceit,
-							FALSE, FALSE, ea.cmdidx);
+						     FALSE, FALSE, ea.cmdidx);
 	case CMD_unmap:
 	case CMD_nunmap:
 	case CMD_vunmap:
 	case CMD_ounmap:
 	case CMD_iunmap:
 	case CMD_cunmap:
+	case CMD_lunmap:
 	    return set_context_in_map_cmd(xp, cmd, arg, forceit,
-							 FALSE, TRUE, ea.cmdidx);
+						      FALSE, TRUE, ea.cmdidx);
 	case CMD_abbreviate:	case CMD_noreabbrev:
 	case CMD_cabbrev:	case CMD_cnoreabbrev:
 	case CMD_iabbrev:	case CMD_inoreabbrev:
 	    return set_context_in_map_cmd(xp, cmd, arg, forceit,
-							 TRUE, FALSE, ea.cmdidx);
+						      TRUE, FALSE, ea.cmdidx);
 	case CMD_unabbreviate:
 	case CMD_cunabbrev:
 	case CMD_iunabbrev:
 	    return set_context_in_map_cmd(xp, cmd, arg, forceit,
-							  TRUE, TRUE, ea.cmdidx);
+						       TRUE, TRUE, ea.cmdidx);
 #ifdef FEAT_MENU
 	case CMD_menu:	    case CMD_noremenu:	    case CMD_unmenu:
 	case CMD_amenu:	    case CMD_anoremenu:	    case CMD_aunmenu:
@@ -3789,6 +3828,16 @@ set_one_cmd_context(xp, buff)
 
 	case CMD_compiler:
 	    xp->xp_context = EXPAND_COMPILER;
+	    xp->xp_pattern = arg;
+	    break;
+
+	case CMD_ownsyntax:
+	    xp->xp_context = EXPAND_OWNSYNTAX;
+	    xp->xp_pattern = arg;
+	    break;
+
+	case CMD_setfiletype:
+	    xp->xp_context = EXPAND_FILETYPE;
 	    xp->xp_pattern = arg;
 	    break;
 
@@ -5228,11 +5277,13 @@ static struct
     {EXPAND_EVENTS, "event"},
     {EXPAND_EXPRESSION, "expression"},
     {EXPAND_FILES, "file"},
+    {EXPAND_FILETYPE, "filetype"},
     {EXPAND_FUNCTIONS, "function"},
     {EXPAND_HELP, "help"},
     {EXPAND_HIGHLIGHT, "highlight"},
     {EXPAND_MAPPINGS, "mapping"},
     {EXPAND_MENUS, "menu"},
+    {EXPAND_OWNSYNTAX, "syntax"},
     {EXPAND_SETTINGS, "option"},
     {EXPAND_SHELLCMD, "shellcmd"},
 #if defined(FEAT_SIGNS)
@@ -8378,7 +8429,7 @@ ex_join(eap)
 	}
 	++eap->line2;
     }
-    do_do_join(eap->line2 - eap->line1 + 1, !eap->forceit);
+    (void)do_join(eap->line2 - eap->line1 + 1, !eap->forceit, TRUE);
     beginline(BL_WHITE | BL_FIX);
     ex_may_print(eap);
 }
@@ -8445,10 +8496,32 @@ ex_undo(eap)
     exarg_T	*eap UNUSED;
 {
     if (eap->addr_count == 1)	    /* :undo 123 */
-	undo_time(eap->line2, FALSE, TRUE);
+	undo_time(eap->line2, FALSE, FALSE, TRUE);
     else
 	u_undo(1);
 }
+
+#ifdef FEAT_PERSISTENT_UNDO
+    static void
+ex_wundo(eap)
+    exarg_T *eap;
+{
+    char_u hash[UNDO_HASH_SIZE];
+
+    u_compute_hash(hash);
+    u_write_undo(eap->arg, eap->forceit, curbuf, hash);
+}
+
+    static void
+ex_rundo(eap)
+    exarg_T *eap;
+{
+    char_u hash[UNDO_HASH_SIZE];
+
+    u_compute_hash(hash);
+    u_read_undo(eap->arg, hash, NULL);
+}
+#endif
 
 /*
  * ":redo".
@@ -8469,6 +8542,7 @@ ex_later(eap)
 {
     long	count = 0;
     int		sec = FALSE;
+    int		file = FALSE;
     char_u	*p = eap->arg;
 
     if (*p == NUL)
@@ -8481,13 +8555,16 @@ ex_later(eap)
 	    case 's': ++p; sec = TRUE; break;
 	    case 'm': ++p; sec = TRUE; count *= 60; break;
 	    case 'h': ++p; sec = TRUE; count *= 60 * 60; break;
+	    case 'd': ++p; sec = TRUE; count *= 24 * 60 * 60; break;
+	    case 'f': ++p; file = TRUE; break;
 	}
     }
 
     if (*p != NUL)
 	EMSG2(_(e_invarg2), eap->arg);
     else
-	undo_time(eap->cmdidx == CMD_earlier ? -count : count, sec, FALSE);
+	undo_time(eap->cmdidx == CMD_earlier ? -count : count,
+							    sec, file, FALSE);
 }
 
 /*
@@ -10392,7 +10469,7 @@ put_view(fd, wp, add_edit, flagp, current_arg_idx)
 
     /* Only when part of a session: restore the argument index.  Some
      * arguments may have been deleted, check if the index is valid. */
-    if (wp->w_arg_idx != current_arg_idx && wp->w_arg_idx <= WARGCOUNT(wp)
+    if (wp->w_arg_idx != current_arg_idx && wp->w_arg_idx < WARGCOUNT(wp)
 						      && flagp == &ssop_flags)
     {
 	if (fprintf(fd, "%ldargu", (long)wp->w_arg_idx + 1) < 0
@@ -11123,7 +11200,8 @@ ex_match(eap)
 ex_X(eap)
     exarg_T	*eap UNUSED;
 {
-    (void)get_crypt_key(TRUE, TRUE);
+    if (get_crypt_method(curbuf) == 0 || blowfish_self_test() == OK)
+	(void)get_crypt_key(TRUE, TRUE);
 }
 #endif
 

@@ -640,13 +640,6 @@ getcmdline(firstc, count, indent)
 		c = p_wc;
 	    }
 	}
-#if 0 /* If enabled <Down> on a file takes you _completely_ out of wildmenu */
-	if (p_wmnu
-		&& (xpc.xp_context == EXPAND_FILES
-		    || xpc.xp_context == EXPAND_MENUNAMES)
-		&& (c == K_UP || c == K_DOWN))
-	    xpc.xp_context = EXPAND_NOTHING;
-#endif
 
 #endif	/* FEAT_WILDMENU */
 
@@ -669,7 +662,8 @@ getcmdline(firstc, count, indent)
 #ifdef FEAT_EVAL
 	    else if (c == 'e')
 	    {
-		char_u		    *p = NULL;
+		char_u	*p = NULL;
+		int	len;
 
 		/*
 		 * Replace the command line with the result of an expression.
@@ -694,10 +688,11 @@ getcmdline(firstc, count, indent)
 		    p = get_expr_line();
 		    --textlock;
 		    restore_cmdline(&save_ccline);
+		    len = (int)STRLEN(p);
 
-		    if (p != NULL && realloc_cmdbuff((int)STRLEN(p) + 1) == OK)
+		    if (p != NULL && realloc_cmdbuff(len + 1) == OK)
 		    {
-			ccline.cmdlen = (int)STRLEN(p);
+			ccline.cmdlen = len;
 			STRCPY(ccline.cmdbuff, p);
 			vim_free(p);
 
@@ -1334,6 +1329,8 @@ getcmdline(firstc, count, indent)
 	/* Mouse scroll wheel: ignored here */
 	case K_MOUSEDOWN:
 	case K_MOUSEUP:
+	case K_MOUSELEFT:
+	case K_MOUSERIGHT:
 	/* Alternate buttons ignored here */
 	case K_X1MOUSE:
 	case K_X1DRAG:
@@ -1361,7 +1358,7 @@ getcmdline(firstc, count, indent)
 	case K_HOR_SCROLLBAR:
 		if (msg_scrolled == 0)
 		{
-		    gui_do_horiz_scroll();
+		    gui_do_horiz_scroll(scrollbar_value, FALSE);
 		    redrawcmd();
 		}
 		goto cmdline_not_changed;
@@ -1411,6 +1408,11 @@ getcmdline(firstc, count, indent)
 				   && !equalpos(curwin->w_cursor, old_cursor))
 		    {
 			c = gchar_cursor();
+			/* If 'ignorecase' and 'smartcase' are set and the
+			* command line has no uppercase characters, convert
+			* the character to lowercase */
+			if (p_ic && p_scs && !pat_has_uppercase(ccline.cmdbuff))
+			    c = MB_TOLOWER(c);
 			if (c != NUL)
 			{
 			    if (c == firstc || vim_strchr((char_u *)(
@@ -2520,6 +2522,9 @@ realloc_cmdbuff(len)
 {
     char_u	*p;
 
+    if (len < ccline.cmdbufflen)
+	return OK;			/* no need to resize */
+
     p = ccline.cmdbuff;
     alloc_cmdbuff(len);			/* will get some more */
     if (ccline.cmdbuff == NULL)		/* out of memory */
@@ -2527,7 +2532,10 @@ realloc_cmdbuff(len)
 	ccline.cmdbuff = p;		/* keep the old one */
 	return FAIL;
     }
-    mch_memmove(ccline.cmdbuff, p, (size_t)ccline.cmdlen + 1);
+    /* There isn't always a NUL after the command, but it may need to be
+     * there, thus copy up to the NUL and add a NUL. */
+    mch_memmove(ccline.cmdbuff, p, (size_t)ccline.cmdlen);
+    ccline.cmdbuff[ccline.cmdlen] = NUL;
     vim_free(p);
 
     if (ccline.xpc != NULL
@@ -2741,7 +2749,7 @@ put_on_cmdline(str, len, redraw)
 
     /* Check if ccline.cmdbuff needs to be longer */
     if (ccline.cmdlen + len + 1 >= ccline.cmdbufflen)
-	retval = realloc_cmdbuff(ccline.cmdlen + len);
+	retval = realloc_cmdbuff(ccline.cmdlen + len + 1);
     else
 	retval = OK;
     if (retval == OK)
@@ -3332,9 +3340,9 @@ nextwild(xp, type, options)
     if (p2 != NULL && !got_int)
     {
 	difflen = (int)STRLEN(p2) - xp->xp_pattern_len;
-	if (ccline.cmdlen + difflen > ccline.cmdbufflen - 4)
+	if (ccline.cmdlen + difflen + 4 > ccline.cmdbufflen)
 	{
-	    v = realloc_cmdbuff(ccline.cmdlen + difflen);
+	    v = realloc_cmdbuff(ccline.cmdlen + difflen + 4);
 	    xp->xp_pattern = ccline.cmdbuff + i;
 	}
 	else
@@ -3773,7 +3781,7 @@ vim_strsave_fnameescape(fname, shell)
 
     /* '>' and '+' are special at the start of some commands, e.g. ":edit" and
      * ":write".  "cd -" has a special meaning. */
-    if (*p == '>' || *p == '+' || (*p == '-' && p[1] == NUL))
+    if (p != NULL && (*p == '>' || *p == '+' || (*p == '-' && p[1] == NUL)))
 	escape_fname(&p);
 
     return p;
@@ -4091,8 +4099,10 @@ addstar(fname, len, context)
     int		i, j;
     int		new_len;
     char_u	*tail;
+    int		ends_in_star;
 
     if (context != EXPAND_FILES
+	    && context != EXPAND_FILES_IN_PATH
 	    && context != EXPAND_SHELLCMD
 	    && context != EXPAND_DIRECTORIES)
     {
@@ -4107,6 +4117,8 @@ addstar(fname, len, context)
 	if (context == EXPAND_HELP
 		|| context == EXPAND_COLORS
 		|| context == EXPAND_COMPILER
+		|| context == EXPAND_OWNSYNTAX
+		|| context == EXPAND_FILETYPE
 		|| (context == EXPAND_TAGS && fname[0] == '/'))
 	    retval = vim_strnsave(fname, len);
 	else
@@ -4181,8 +4193,17 @@ addstar(fname, len, context)
 	     * When the name ends in '$' don't add a star, remove the '$'.
 	     */
 	    tail = gettail(retval);
+	    ends_in_star = (len > 0 && retval[len - 1] == '*');
+#ifndef BACKSLASH_IN_FILENAME
+	    for (i = len - 2; i >= 0; --i)
+	    {
+		if (retval[i] != '\\')
+		    break;
+		ends_in_star = !ends_in_star;
+	    }
+#endif
 	    if ((*retval != '~' || tail != retval)
-		    && (len == 0 || retval[len - 1] != '*')
+		    && !ends_in_star
 		    && vim_strchr(tail, '$') == NULL
 		    && vim_strchr(retval, '`') == NULL)
 		retval[len++] = '*';
@@ -4407,7 +4428,9 @@ ExpandFromContext(xp, pat, num_file, file, options)
     if (options & WILD_SILENT)
 	flags |= EW_SILENT;
 
-    if (xp->xp_context == EXPAND_FILES || xp->xp_context == EXPAND_DIRECTORIES)
+    if (xp->xp_context == EXPAND_FILES
+	    || xp->xp_context == EXPAND_DIRECTORIES
+	    || xp->xp_context == EXPAND_FILES_IN_PATH)
     {
 	/*
 	 * Expand file or directory names.
@@ -4437,6 +4460,8 @@ ExpandFromContext(xp, pat, num_file, file, options)
 
 	if (xp->xp_context == EXPAND_FILES)
 	    flags |= EW_FILE;
+	else if (xp->xp_context == EXPAND_FILES_IN_PATH)
+	    flags |= (EW_FILE | EW_PATH);
 	else
 	    flags = (flags | EW_DIR) & ~EW_FILE;
 	/* Expand wildcards, supporting %:h and the like. */
@@ -4479,6 +4504,10 @@ ExpandFromContext(xp, pat, num_file, file, options)
 	return ExpandRTDir(pat, num_file, file, "colors");
     if (xp->xp_context == EXPAND_COMPILER)
 	return ExpandRTDir(pat, num_file, file, "compiler");
+    if (xp->xp_context == EXPAND_OWNSYNTAX)
+	return ExpandRTDir(pat, num_file, file, "syntax");
+    if (xp->xp_context == EXPAND_FILETYPE)
+	return ExpandRTDir(pat, num_file, file, "{syntax,indent,ftplugin}");
 # if defined(FEAT_USR_CMDS) && defined(FEAT_EVAL)
     if (xp->xp_context == EXPAND_USER_LIST)
 	return ExpandUserList(xp, num_file, file);
@@ -4918,15 +4947,17 @@ ExpandUserList(xp, num_file, file)
 #endif
 
 /*
- * Expand color scheme names: 'runtimepath'/colors/{pat}.vim
- * or compiler names.
+ * Expand color scheme, compiler or filetype names:
+ * 'runtimepath'/{dirnames}/{pat}.vim
+ * dirnames may contain one directory (ex: "colorscheme") or can be a glob
+ * expression matching multiple directories (ex: "{syntax,ftplugin,indent}").
  */
     static int
-ExpandRTDir(pat, num_file, file, dirname)
+ExpandRTDir(pat, num_file, file, dirnames)
     char_u	*pat;
     int		*num_file;
     char_u	***file;
-    char	*dirname;	/* "colors" or "compiler" */
+    char	*dirnames;
 {
     char_u	*all;
     char_u	*s;
@@ -4935,10 +4966,10 @@ ExpandRTDir(pat, num_file, file, dirname)
 
     *num_file = 0;
     *file = NULL;
-    s = alloc((unsigned)(STRLEN(pat) + STRLEN(dirname) + 7));
+    s = alloc((unsigned)(STRLEN(pat) + STRLEN(dirnames) + 7));
     if (s == NULL)
 	return FAIL;
-    sprintf((char *)s, "%s/%s*.vim", dirname, pat);
+    sprintf((char *)s, "%s/%s*.vim", dirnames, pat);
     all = globpath(p_rtp, s, 0);
     vim_free(s);
     if (all == NULL)
@@ -4966,6 +4997,11 @@ ExpandRTDir(pat, num_file, file, dirname)
 	    ++e;
     }
     vim_free(all);
+
+    /* Sort and remove duplicates which can happen when specifying multiple
+     * directories in dirnames such as "{syntax,ftplugin,indent}". */
+    remove_duplicates(&ga);
+
     *file = ga.ga_data;
     *num_file = ga.ga_len;
     return OK;
@@ -5010,7 +5046,14 @@ globpath(path, file, expand_options)
 	copy_option_part(&path, buf, MAXPATHL, ",");
 	if (STRLEN(buf) + STRLEN(file) + 2 < MAXPATHL)
 	{
+# if defined(MSWIN) || defined(MSDOS)
+	    /* Using the platform's path separator (\) makes vim incorrectly
+	     * treat it as an escape character, use '/' instead. */
+	    if (*buf != NUL && !after_pathsep(buf, buf + STRLEN(buf)))
+		STRCAT(buf, "/");
+# else
 	    add_pathsep(buf);
+# endif
 	    STRCAT(buf, file);
 	    if (ExpandFromContext(&xpc, buf, &num_p, &p,
 			     WILD_SILENT|expand_options) != FAIL && num_p > 0)

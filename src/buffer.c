@@ -60,14 +60,21 @@ static void insert_sign __ARGS((buf_T *buf, signlist_T *prev, signlist_T *next, 
 static void buf_delete_signs __ARGS((buf_T *buf));
 #endif
 
+#if defined(FEAT_WINDOWS) && defined(FEAT_QUICKFIX)
+static char *msg_loclist = N_("[Location List]");
+static char *msg_qflist = N_("[Quickfix List]");
+#endif
+
 /*
- * Open current buffer, that is: open the memfile and read the file into memory
- * return FAIL for failure, OK otherwise
+ * Open current buffer, that is: open the memfile and read the file into
+ * memory.
+ * Return FAIL for failure, OK otherwise.
  */
     int
-open_buffer(read_stdin, eap)
+open_buffer(read_stdin, eap, flags)
     int		read_stdin;	    /* read file from stdin */
     exarg_T	*eap;		    /* for forced 'ff' and 'fenc' or NULL */
+    int		flags;		    /* extra flags for readfile() */
 {
     int		retval = OK;
 #ifdef FEAT_AUTOCMD
@@ -129,7 +136,8 @@ open_buffer(read_stdin, eap)
 	netbeansFireChanges = 0;
 #endif
 	retval = readfile(curbuf->b_ffname, curbuf->b_fname,
-		  (linenr_T)0, (linenr_T)0, (linenr_T)MAXLNUM, eap, READ_NEW);
+		  (linenr_T)0, (linenr_T)0, (linenr_T)MAXLNUM, eap,
+		  flags | READ_NEW);
 #ifdef FEAT_NETBEANS_INTG
 	netbeansFireChanges = oldFire;
 #endif
@@ -150,13 +158,15 @@ open_buffer(read_stdin, eap)
 	 */
 	curbuf->b_p_bin = TRUE;
 	retval = readfile(NULL, NULL, (linenr_T)0,
-		  (linenr_T)0, (linenr_T)MAXLNUM, NULL, READ_NEW + READ_STDIN);
+		  (linenr_T)0, (linenr_T)MAXLNUM, NULL,
+		  flags | (READ_NEW + READ_STDIN));
 	curbuf->b_p_bin = save_bin;
 	if (retval == OK)
 	{
 	    line_count = curbuf->b_ml.ml_line_count;
 	    retval = readfile(NULL, NULL, (linenr_T)line_count,
-			    (linenr_T)0, (linenr_T)MAXLNUM, eap, READ_BUFFER);
+			    (linenr_T)0, (linenr_T)MAXLNUM, eap,
+			    flags | READ_BUFFER);
 	    if (retval == OK)
 	    {
 		/* Delete the binary lines. */
@@ -388,13 +398,7 @@ close_buffer(win, buf, action)
     /* Return when a window is displaying the buffer or when it's not
      * unloaded. */
     if (buf->b_nwindows > 0 || !unload_buf)
-    {
-#if 0	    /* why was this here? */
-	if (buf == curbuf)
-	    u_sync();	    /* sync undo before going to another buffer */
-#endif
 	return;
-    }
 
     /* Always remove the buffer when there is no file name. */
     if (buf->b_ffname == NULL)
@@ -411,7 +415,7 @@ close_buffer(win, buf, action)
     buf->b_nwindows = nwindows;
 #endif
 
-    buf_freeall(buf, del_buf, wipe_buf);
+    buf_freeall(buf, (del_buf ? BFA_DEL : 0) + (wipe_buf ? BFA_WIPE : 0));
 
 #ifdef FEAT_AUTOCMD
     /* Autocommands may have deleted the buffer. */
@@ -510,13 +514,15 @@ buf_clear_file(buf)
 
 /*
  * buf_freeall() - free all things allocated for a buffer that are related to
- * the file.
+ * the file.  flags:
+ * BFA_DEL	  buffer is going to be deleted
+ * BFA_WIPE	  buffer is going to be wiped out
+ * BFA_KEEP_UNDO  do not free undo information
  */
     void
-buf_freeall(buf, del_buf, wipe_buf)
+buf_freeall(buf, flags)
     buf_T	*buf;
-    int		del_buf UNUSED;	    /* buffer is going to be deleted */
-    int		wipe_buf UNUSED;    /* buffer is going to be wiped out */
+    int		flags;
 {
 #ifdef FEAT_AUTOCMD
     int		is_curbuf = (buf == curbuf);
@@ -524,13 +530,13 @@ buf_freeall(buf, del_buf, wipe_buf)
     apply_autocmds(EVENT_BUFUNLOAD, buf->b_fname, buf->b_fname, FALSE, buf);
     if (!buf_valid(buf))	    /* autocommands may delete the buffer */
 	return;
-    if (del_buf && buf->b_p_bl)
+    if ((flags & BFA_DEL) && buf->b_p_bl)
     {
 	apply_autocmds(EVENT_BUFDELETE, buf->b_fname, buf->b_fname, FALSE, buf);
 	if (!buf_valid(buf))	    /* autocommands may delete the buffer */
 	    return;
     }
-    if (wipe_buf)
+    if (flags & BFA_WIPE)
     {
 	apply_autocmds(EVENT_BUFWIPEOUT, buf->b_fname, buf->b_fname,
 								  FALSE, buf);
@@ -575,12 +581,15 @@ buf_freeall(buf, del_buf, wipe_buf)
 #ifdef FEAT_TCL
     tcl_buffer_free(buf);
 #endif
-    u_blockfree(buf);		    /* free the memory allocated for undo */
     ml_close(buf, TRUE);	    /* close and delete the memline/memfile */
     buf->b_ml.ml_line_count = 0;    /* no lines in buffer */
-    u_clearall(buf);		    /* reset all undo information */
+    if ((flags & BFA_KEEP_UNDO) == 0)
+    {
+	u_blockfree(buf);	    /* free the memory allocated for undo */
+	u_clearall(buf);	    /* reset all undo information */
+    }
 #ifdef FEAT_SYN_HL
-    syntax_clear(buf);		    /* reset syntax info */
+    syntax_clear(&buf->b_s);	    /* reset syntax info */
 #endif
     buf->b_flags &= ~BF_READERR;    /* a read error is no longer relevant */
 }
@@ -594,6 +603,9 @@ free_buffer(buf)
     buf_T	*buf;
 {
     free_buffer_stuff(buf, TRUE);
+#ifdef FEAT_LUA
+    lua_buffer_free(buf);
+#endif
 #ifdef FEAT_MZSCHEME
     mzscheme_buffer_free(buf);
 #endif
@@ -602,6 +614,9 @@ free_buffer(buf)
 #endif
 #ifdef FEAT_PYTHON
     python_buffer_free(buf);
+#endif
+#ifdef FEAT_PYTHON3
+    python3_buffer_free(buf);
 #endif
 #ifdef FEAT_RUBY
     ruby_buffer_free(buf);
@@ -636,8 +651,7 @@ free_buffer_stuff(buf, free_options)
     buf_delete_signs(buf);		/* delete any signs */
 #endif
 #ifdef FEAT_NETBEANS_INTG
-    if (usingNetbeans)
-        netbeans_file_killed(buf);
+    netbeans_file_killed(buf);
 #endif
 #ifdef FEAT_LOCALMAP
     map_clear_int(buf, MAP_ALL_MODES, TRUE, FALSE);  /* clear local mappings */
@@ -648,7 +662,7 @@ free_buffer_stuff(buf, free_options)
     buf->b_start_fenc = NULL;
 #endif
 #ifdef FEAT_SPELL
-    ga_clear(&buf->b_langp);
+    ga_clear(&buf->b_s.b_langp);
 #endif
 }
 
@@ -1378,6 +1392,10 @@ enter_buffer(buf)
     foldUpdateAll(curwin);	/* update folds (later). */
 #endif
 
+#ifdef FEAT_SYN_HL
+    reset_synblock(curwin);
+    curwin->w_s = &(buf->b_s);
+#endif
     /* Get the buffer in the current window. */
     curwin->w_buffer = buf;
     curbuf = buf;
@@ -1413,7 +1431,7 @@ enter_buffer(buf)
 	    did_filetype = FALSE;
 #endif
 
-	open_buffer(FALSE, NULL);
+	open_buffer(FALSE, NULL, 0);
     }
     else
     {
@@ -1447,8 +1465,7 @@ enter_buffer(buf)
 
 #ifdef FEAT_NETBEANS_INTG
     /* Send fileOpened event because we've changed buffers. */
-    if (usingNetbeans && isNetbeansBuffer(curbuf))
-	netbeans_file_activated(curbuf);
+    netbeans_file_activated(curbuf);
 #endif
 
     /* Change directories when the 'acd' option is set. */
@@ -1461,8 +1478,8 @@ enter_buffer(buf)
 #ifdef FEAT_SPELL
     /* May need to set the spell language.  Can only do this after the buffer
      * has been properly setup. */
-    if (!curbuf->b_help && curwin->w_p_spell && *curbuf->b_p_spl != NUL)
-	(void)did_set_spelllang(curbuf);
+    if (!curbuf->b_help && curwin->w_p_spell && *curwin->w_s->b_p_spl != NUL)
+	(void)did_set_spelllang(curwin);
 #endif
 
     redraw_later(NOT_VALID);
@@ -1616,7 +1633,7 @@ buflist_new(ffname, sfname, lnum, flags)
     if (buf == curbuf)
     {
 	/* free all things allocated for this buffer */
-	buf_freeall(buf, FALSE, FALSE);
+	buf_freeall(buf, 0);
 	if (buf != curbuf)	 /* autocommands deleted the buffer! */
 	    return NULL;
 #if defined(FEAT_AUTOCMD) && defined(FEAT_EVAL)
@@ -1673,8 +1690,8 @@ buflist_new(ffname, sfname, lnum, flags)
     init_var_dict(&buf->b_vars, &buf->b_bufvar);    /* init b: variables */
 #endif
 #ifdef FEAT_SYN_HL
-    hash_init(&buf->b_keywtab);
-    hash_init(&buf->b_keywtab_ic);
+    hash_init(&buf->b_s.b_keywtab);
+    hash_init(&buf->b_s.b_keywtab_ic);
 #endif
 
     buf->b_fname = buf->b_sfname;
@@ -1747,6 +1764,9 @@ free_buf_options(buf, free_p_ff)
 #if defined(FEAT_BEVAL) && defined(FEAT_EVAL)
     clear_string_option(&buf->b_p_bexpr);
 #endif
+#if defined(FEAT_CRYPT)
+    clear_string_option(&buf->b_p_cm);
+#endif
 #if defined(FEAT_EVAL)
     clear_string_option(&buf->b_p_fex);
 #endif
@@ -1773,11 +1793,11 @@ free_buf_options(buf, free_p_ff)
     clear_string_option(&buf->b_p_syn);
 #endif
 #ifdef FEAT_SPELL
-    clear_string_option(&buf->b_p_spc);
-    clear_string_option(&buf->b_p_spf);
-    vim_free(buf->b_cap_prog);
-    buf->b_cap_prog = NULL;
-    clear_string_option(&buf->b_p_spl);
+    clear_string_option(&buf->b_s.b_p_spc);
+    clear_string_option(&buf->b_s.b_p_spf);
+    vim_free(buf->b_s.b_cap_prog);
+    buf->b_s.b_cap_prog = NULL;
+    clear_string_option(&buf->b_s.b_p_spl);
 #endif
 #ifdef FEAT_SEARCHPATH
     clear_string_option(&buf->b_p_sua);
@@ -2989,9 +3009,7 @@ fileinfo(fullname, shorthelp, dont_truncate)
 					  (int)(IOSIZE - (p - buffer)), TRUE);
     }
 
-    len = STRLEN(buffer);
-    vim_snprintf((char *)buffer + len, IOSIZE - len,
-	    "\"%s%s%s%s%s%s",
+    vim_snprintf_add((char *)buffer, IOSIZE, "\"%s%s%s%s%s%s",
 	    curbufIsChanged() ? (shortmess(SHM_MOD)
 					  ?  " [+]" : _(" [Modified]")) : " ",
 	    (curbuf->b_flags & BF_NOTEDITED)
@@ -3018,27 +3036,24 @@ fileinfo(fullname, shorthelp, dont_truncate)
     else
 	n = (int)(((long)curwin->w_cursor.lnum * 100L) /
 					    (long)curbuf->b_ml.ml_line_count);
-    len = STRLEN(buffer);
     if (curbuf->b_ml.ml_flags & ML_EMPTY)
     {
-	vim_snprintf((char *)buffer + len, IOSIZE - len, "%s", _(no_lines_msg));
+	vim_snprintf_add((char *)buffer, IOSIZE, "%s", _(no_lines_msg));
     }
 #ifdef FEAT_CMDL_INFO
     else if (p_ru)
     {
 	/* Current line and column are already on the screen -- webb */
 	if (curbuf->b_ml.ml_line_count == 1)
-	    vim_snprintf((char *)buffer + len, IOSIZE - len,
-		    _("1 line --%d%%--"), n);
+	    vim_snprintf_add((char *)buffer, IOSIZE, _("1 line --%d%%--"), n);
 	else
-	    vim_snprintf((char *)buffer + len, IOSIZE - len,
-		    _("%ld lines --%d%%--"),
+	    vim_snprintf_add((char *)buffer, IOSIZE, _("%ld lines --%d%%--"),
 					 (long)curbuf->b_ml.ml_line_count, n);
     }
 #endif
     else
     {
-	vim_snprintf((char *)buffer + len, IOSIZE - len,
+	vim_snprintf_add((char *)buffer, IOSIZE,
 		_("line %ld of %ld --%d%%-- col "),
 		(long)curwin->w_cursor.lnum,
 		(long)curbuf->b_ml.ml_line_count,
@@ -3118,7 +3133,7 @@ maketitle()
     }
 
     need_maketitle = FALSE;
-    if (!p_title && !p_icon)
+    if (!p_title && !p_icon && lasttitle == NULL && lasticon == NULL)
 	return;
 
     if (p_title)
@@ -3861,6 +3876,13 @@ build_stl_str_hl(wp, out, outlen, fmt, use_sandbox, fillchar, maxwidth, hltab, t
 	    if (wp->w_p_pvw)
 		str = (char_u *)((opt == STL_PREVIEWFLAG_ALT) ? ",PRV"
 							    : _("[Preview]"));
+	    break;
+
+	case STL_QUICKFIX:
+	    if (bt_quickfix(wp->w_buffer))
+		str = (char_u *)(wp->w_llist_ref
+			    ? _(msg_loclist)
+			    : _(msg_qflist));
 	    break;
 #endif
 
@@ -5040,7 +5062,6 @@ write_viminfo_bufferlist(fp)
 #endif
     char_u	*line;
     int		max_buffers;
-    size_t	len;
 
     if (find_viminfo_parameter('%') == NULL)
 	return;
@@ -5061,7 +5082,7 @@ write_viminfo_bufferlist(fp)
     set_last_cursor(curwin);
 #endif
 
-    fprintf(fp, _("\n# Buffer list:\n"));
+    fputs(_("\n# Buffer list:\n"), fp);
     for (buf = firstbuf; buf != NULL ; buf = buf->b_next)
     {
 	if (buf->b_fname == NULL
@@ -5076,8 +5097,7 @@ write_viminfo_bufferlist(fp)
 	    break;
 	putc('%', fp);
 	home_replace(NULL, buf->b_ffname, line, MAXPATHL, TRUE);
-	len = STRLEN(line);
-	vim_snprintf((char *)line + len, len - LINE_BUF_LEN, "\t%ld\t%d",
+	vim_snprintf_add((char *)line, LINE_BUF_LEN, "\t%ld\t%d",
 			(long)buf->b_last_cursor.lnum,
 			buf->b_last_cursor.col);
 	viminfo_writestring(fp, line);
@@ -5110,9 +5130,9 @@ buf_spname(buf)
 		goto win_found;
 win_found:
 	if (win != NULL && win->w_llist_ref != NULL)
-	    return _("[Location List]");
+	    return _(msg_loclist);
 	else
-	    return _("[Quickfix List]");
+	    return _(msg_qflist);
     }
 #endif
 #ifdef FEAT_QUICKFIX

@@ -543,19 +543,6 @@ changed_cline_bef_curs_win(wp)
 						|VALID_CHEIGHT|VALID_TOPLINE);
 }
 
-#if 0 /* not used */
-/*
- * Call this function when the length of the cursor line (in screen
- * characters) has changed, and the position of the cursor doesn't change.
- * Need to take care of w_botline separately!
- */
-    void
-changed_cline_aft_curs()
-{
-    curwin->w_valid &= ~VALID_CHEIGHT;
-}
-#endif
-
 /*
  * Call this function when the length of a line (in screen characters) above
  * the cursor have changed.
@@ -613,46 +600,12 @@ invalidate_botline_win(wp)
     wp->w_valid &= ~(VALID_BOTLINE|VALID_BOTLINE_AP);
 }
 
-#if 0 /* never used */
-/*
- * Mark curwin->w_botline as approximated (because of some small change in the
- * buffer).
- */
-    void
-approximate_botline()
-{
-    curwin->w_valid &= ~VALID_BOTLINE;
-}
-#endif
-
     void
 approximate_botline_win(wp)
     win_T	*wp;
 {
     wp->w_valid &= ~VALID_BOTLINE;
 }
-
-#if 0 /* not used */
-/*
- * Return TRUE if curwin->w_botline is valid.
- */
-    int
-botline_valid()
-{
-    return (curwin->w_valid & VALID_BOTLINE);
-}
-#endif
-
-#if 0 /* not used */
-/*
- * Return TRUE if curwin->w_botline is valid or approximated.
- */
-    int
-botline_approximated()
-{
-    return (curwin->w_valid & VALID_BOTLINE_AP);
-}
-#endif
 
 /*
  * Return TRUE if curwin->w_wrow and curwin->w_wcol are valid.
@@ -696,7 +649,7 @@ validate_cline_row()
 
 /*
  * Compute wp->w_cline_row and wp->w_cline_height, based on the current value
- * of wp->w_topine.
+ * of wp->w_topline.
  *
  * Returns OK when cursor is in the window, FAIL when it isn't.
  */
@@ -916,14 +869,14 @@ validate_cursor_col()
 }
 
 /*
- * Compute offset of a window, occupied by line number, fold column and sign
- * column (these don't move when scrolling horizontally).
+ * Compute offset of a window, occupied by absolute or relative line number,
+ * fold column and sign column (these don't move when scrolling horizontally).
  */
     int
 win_col_off(wp)
     win_T	*wp;
 {
-    return ((wp->w_p_nu ? number_width(wp) + 1 : 0)
+    return (((wp->w_p_nu || wp->w_p_rnu) ? number_width(wp) + 1 : 0)
 #ifdef FEAT_CMDWIN
 	    + (cmdwin_type == 0 || wp != curwin ? 0 : 1)
 #endif
@@ -933,8 +886,8 @@ win_col_off(wp)
 #ifdef FEAT_SIGNS
 	    + (
 # ifdef FEAT_NETBEANS_INTG
-		/* always show glyph gutter in netbeans */
-		usingNetbeans ||
+		/* show glyph gutter in netbeans */
+		netbeans_active() ||
 # endif
 		wp->w_buffer->b_signlist != NULL ? 2 : 0)
 #endif
@@ -949,13 +902,14 @@ curwin_col_off()
 
 /*
  * Return the difference in column offset for the second screen line of a
- * wrapped line.  It's 8 if 'number' is on and 'n' is in 'cpoptions'.
+ * wrapped line.  It's 8 if 'number' or 'relativenumber' is on and 'n' is in
+ * 'cpoptions'.
  */
     int
 win_col_off2(wp)
     win_T	*wp;
 {
-    if (wp->w_p_nu && vim_strchr(p_cpo, CPO_NUMCOL) != NULL)
+    if ((wp->w_p_nu || wp->w_p_rnu) && vim_strchr(p_cpo, CPO_NUMCOL) != NULL)
 	return number_width(wp) + 1;
     return 0;
 }
@@ -1218,17 +1172,22 @@ curs_columns(scroll)
     if (prev_skipcol != curwin->w_skipcol)
 	redraw_later(NOT_VALID);
 
+    /* Redraw when w_row changes and 'relativenumber' is set */
+    if (((curwin->w_valid & VALID_WROW) == 0 && (curwin->w_p_rnu
 #ifdef FEAT_SYN_HL
-    /* Redraw when w_virtcol changes and 'cursorcolumn' is set, or when w_row
-     * changes and 'cursorline' is set. */
-    if (((curwin->w_p_cuc && (curwin->w_valid & VALID_VIRTCOL) == 0)
-		|| (curwin->w_p_cul && (curwin->w_valid & VALID_WROW) == 0))
-# ifdef FEAT_INS_EXPAND
-	    && !pum_visible()
-# endif
-	    )
-	redraw_later(SOME_VALID);
+	/* or when w_row changes and 'cursorline' is set. */
+						|| curwin->w_p_cul
 #endif
+	))
+#ifdef FEAT_SYN_HL
+	/* or when w_virtcol changes and 'cursorcolumn' is set */
+	|| (curwin->w_p_cuc && (curwin->w_valid & VALID_VIRTCOL) == 0)
+#endif
+	)
+# ifdef FEAT_INS_EXPAND
+	    if (!pum_visible())
+# endif
+		redraw_later(SOME_VALID);
 
     curwin->w_valid |= VALID_WCOL|VALID_WROW|VALID_VIRTCOL;
 }
@@ -2878,3 +2837,68 @@ halfpage(flag, Prenum)
     beginline(BL_SOL | BL_FIX);
     redraw_later(VALID);
 }
+
+#if defined(FEAT_CURSORBIND) || defined(PROTO)
+    void
+do_check_cursorbind()
+{
+    linenr_T	line = curwin->w_cursor.lnum;
+    colnr_T	col =  curwin->w_cursor.col;
+    win_T	*old_curwin = curwin;
+    buf_T	*old_curbuf = curbuf;
+# ifdef FEAT_VISUAL
+    int		old_VIsual_select = VIsual_select;
+    int		old_VIsual_active = VIsual_active;
+# endif
+
+    /*
+     * loop through the cursorbound windows
+     */
+# ifdef FEAT_VISUAL
+    VIsual_select = VIsual_active = 0;
+# endif
+    for (curwin = firstwin; curwin; curwin = curwin->w_next)
+    {
+	curbuf = curwin->w_buffer;
+	/* skip original window  and windows with 'noscrollbind' */
+	if (curwin != old_curwin && curwin->w_p_crb)
+	{
+# ifdef FEAT_DIFF
+	    if (curwin->w_p_diff)
+		curwin->w_cursor.lnum
+			= diff_get_corresponding_line(old_curbuf,
+						      line,
+						      curbuf,
+						      curwin->w_cursor.lnum);
+	    else
+# endif
+		curwin->w_cursor.lnum = line;
+	    curwin->w_cursor.col = col;
+
+	    /* Make sure the cursor is in a valid position. */
+	    check_cursor();
+# ifdef FEAT_MBYTE
+	    /* Correct cursor for multi-byte character. */
+	    if (has_mbyte)
+		mb_adjust_cursor();
+# endif
+
+	    redraw_later(VALID);
+	    update_topline();
+# ifdef FEAT_WINDOWS
+	    curwin->w_redr_status = TRUE;
+# endif
+	}
+    }
+
+    /*
+     * reset current-window
+     */
+# ifdef FEAT_VISUAL
+    VIsual_select = old_VIsual_select;
+    VIsual_active = old_VIsual_active;
+# endif
+    curwin = old_curwin;
+    curbuf = old_curbuf;
+}
+#endif /* FEAT_CURSORBIND */

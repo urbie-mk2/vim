@@ -1,4 +1,4 @@
-*message.txt*   For Vim version 7.2.  Last change: 2010 Feb 17
+*message.txt*   For Vim version 7.3.  Last change: 2010 Aug 10
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -19,7 +19,7 @@ The ":messages" command can be used to view previously given messages.  This
 is especially useful when messages have been overwritten or truncated.  This
 depends on the 'shortmess' option.
 
-The number of remembered messages is fixed at 20 for the tiny version and 100
+The number of remembered messages is fixed at 20 for the tiny version and 200
 for other versions.
 
 								*g<*
@@ -467,7 +467,16 @@ Oh, oh.  You must have been doing something complicated, or some other program
 is consuming your memory.  Be careful!  Vim is not completely prepared for an
 out-of-memory situation.  First make sure that any changes are saved.  Then
 try to solve the memory shortage.  To stay on the safe side, exit Vim and
-start again.  Also see |msdos-limitations|.
+start again.
+
+Buffers are only partly kept in memory, thus editing a very large file is
+unlikely to cause an out-of-memory situation.  Undo information is completely
+in memory, you can reduce that with these options:
+- 'undolevels'  Set to a low value, or to -1 to disable undo completely.  This
+  helps for a change that affects all lines.
+- 'undoreload' Set to zero to disable.
+
+Also see |msdos-limitations|.
 
 							*E339*  >
   Pattern too long
@@ -538,7 +547,7 @@ Vim (and Vi) expect tags files to be sorted in ASCII order.  Binary searching
 can then be used, which is a lot faster than a linear search.  If your tags
 files are not properly sorted, reset the |'tagbsearch'| option.
 This message is only given when Vim detects a problem when searching for a
-tag.  Sometimes this message is not given, even thought the tags file is not
+tag.  Sometimes this message is not given, even though the tags file is not
 properly sorted.
 
 							*E460*  >
@@ -585,6 +594,7 @@ when using ":w"), therefore Vim requires using a !  after the command, e.g.:
 Messages like this appear when starting up.  This is not a Vim problem, your
 X11 configuration is wrong.  You can find a hint on how to solve this here:
 http://groups.yahoo.com/group/solarisonintel/message/12179.
+[this URL is no longer valid]
 
 							*W10*  >
   Warning: Changing a readonly file

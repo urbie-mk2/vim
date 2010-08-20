@@ -1,4 +1,4 @@
-*quickfix.txt*  For Vim version 7.2.  Last change: 2009 May 24
+*quickfix.txt*  For Vim version 7.3.  Last change: 2010 Jul 20
 
 
 		  VIM REFERENCE MANUAL    by Bram Moolenaar
@@ -301,7 +301,7 @@ use this code: >
 =============================================================================
 2. The error window					*quickfix-window*
 
-							*:cope* *:copen*
+					    *:cope* *:copen* *w:quickfix_title*
 :cope[n] [height]	Open a window to show the current list of errors.
 			When [height] is given, the window becomes that high
 			(if there is room).  Otherwise the window is made ten
@@ -310,7 +310,11 @@ use this code: >
 			'buftype' equal to "quickfix".  Don't change this!
 			If there already is a quickfix window, it will be made
 			the current window.  It is not possible to open a
-			second quickfix window.
+			second quickfix window. The window will have the
+			w:quickfix_title variable set which will indicate the
+			command that produced the quickfix list. This can be
+			used to compose a custom status line if the value of
+			'statusline' is adjusted properly.
 
 							*:lop* *:lopen*
 :lop[en] [height]	Open a window to show the location list for the
@@ -1230,7 +1234,7 @@ identified directory.  If not, it is searched in all other directories of the
 directory stack (NOT the directory subtree!).  If it is still not found, it is
 assumed that it is in Vim's current directory.
 
-There are limitation in this algorithm.  This examples assume that make just
+There are limitations in this algorithm.  These examples assume that make just
 prints information about entering a directory in the form "Making all in dir".
 
 1) Assume you have following directories and files:
@@ -1260,7 +1264,7 @@ prints information about entering a directory in the form "Making all in dir".
    This can be solved by printing absolute directories in the "enter directory"
    message or by printing "leave directory" messages..
 
-To avoid this problems, ensure to print absolute directory names and "leave
+To avoid this problem, ensure to print absolute directory names and "leave
 directory" messages.
 
 Examples for Makefiles:

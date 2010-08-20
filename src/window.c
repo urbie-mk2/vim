@@ -1175,6 +1175,9 @@ win_init(newp, oldp, flags)
     int		i;
 
     newp->w_buffer = oldp->w_buffer;
+#ifdef FEAT_SYN_HL
+    newp->w_s = &(oldp->w_buffer->b_s);
+#endif
     oldp->w_buffer->b_nwindows++;
     newp->w_cursor = oldp->w_cursor;
     newp->w_valid = 0;
@@ -1222,6 +1225,10 @@ win_init(newp, oldp, flags)
 # endif
 
     win_init_some(newp, oldp);
+
+# ifdef FEAT_SYN_HL
+    check_colorcolumn(newp);
+# endif
 }
 
 /*
@@ -3298,6 +3305,9 @@ win_alloc_firstwin(oldwin)
 	if (curwin == NULL || curbuf == NULL)
 	    return FAIL;
 	curwin->w_buffer = curbuf;
+#ifdef FEAT_SYN_HL
+	curwin->w_s = &(curbuf->b_s);
+#endif
 	curbuf->b_nwindows = 1;	/* there is one window */
 #ifdef FEAT_WINDOWS
 	curwin->w_alist = &global_alist;
@@ -3779,6 +3789,9 @@ goto_tabpage(n)
 goto_tabpage_tp(tp)
     tabpage_T	*tp;
 {
+    /* Don't repeat a message in another tab page. */
+    set_keep_msg(NULL, 0);
+
     if (tp != curtab && leave_tabpage(tp->tp_curwin->w_buffer) == OK)
     {
 	if (valid_tabpage(tp))
@@ -3864,6 +3877,10 @@ tabpage_move(nr)
 win_goto(wp)
     win_T	*wp;
 {
+#ifdef FEAT_CONCEAL
+    win_T	*owp = curwin;
+#endif
+
     if (text_locked())
     {
 	beep_flush();
@@ -3886,6 +3903,13 @@ win_goto(wp)
     need_mouse_correct = TRUE;
 #endif
     win_enter(wp, TRUE);
+
+#ifdef FEAT_CONCEAL
+    /* Conceal cursor line in previous window, unconceal in current window. */
+    if (win_valid(owp))
+	update_single_line(owp, owp->w_cursor.lnum);
+    update_single_line(curwin, curwin->w_cursor.lnum);
+#endif
 }
 
 #if defined(FEAT_PERL) || defined(PROTO)
@@ -4346,6 +4370,10 @@ win_free(wp, tp)
     block_autocmds();
 #endif
 
+#ifdef FEAT_LUA
+    lua_window_free(wp);
+#endif
+
 #ifdef FEAT_MZSCHEME
     mzscheme_window_free(wp);
 #endif
@@ -4356,6 +4384,10 @@ win_free(wp, tp)
 
 #ifdef FEAT_PYTHON
     python_window_free(wp);
+#endif
+
+#ifdef FEAT_PYTHON3
+    python3_window_free(wp);
 #endif
 
 #ifdef FEAT_TCL
@@ -4401,6 +4433,11 @@ win_free(wp, tp)
 	gui_mch_destroy_scrollbar(&wp->w_scrollbars[SBAR_RIGHT]);
     }
 #endif /* FEAT_GUI */
+
+#ifdef FEAT_SYN_HL
+    reset_synblock(wp);  /* free independent synblock */
+    vim_free(wp->w_p_cc_cols);
+#endif
 
 #ifdef FEAT_AUTOCMD
     if (wp != aucmd_win)

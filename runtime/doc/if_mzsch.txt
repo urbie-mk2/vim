@@ -1,4 +1,4 @@
-*if_mzsch.txt*  For Vim version 7.2.  Last change: 2010 Feb 11
+*if_mzsch.txt*  For Vim version 7.3.  Last change: 2010 Feb 11
 
 
 		  VIM REFERENCE MANUAL    by Sergey Khorev
@@ -233,7 +233,7 @@ Windows							    *mzscheme-window*
 ==============================================================================
 5. mzeval() Vim function				    *mzscheme-mzeval*
 
-To facilitate bi-directional interface, you can use |mzeval| function to
+To facilitate bi-directional interface, you can use |mzeval()| function to
 evaluate MzScheme expressions and pass their values to VimL.
 
 ==============================================================================

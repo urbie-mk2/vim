@@ -14,6 +14,9 @@ static int win_chartabsize __ARGS((win_T *wp, char_u *p, colnr_T col));
 #endif
 
 #ifdef FEAT_MBYTE
+# if defined(HAVE_WCHAR_H)
+#  include <wchar.h>	    /* for towupper() and towlower() */
+# endif
 static int win_nolbr_chartabsize __ARGS((win_T *wp, char_u *s, colnr_T col, int *headp));
 #endif
 
@@ -839,14 +842,25 @@ win_chartabsize(wp, p, col)
 #endif
 
 /*
- * return the number of characters the string 's' will take on the screen,
- * taking into account the size of a tab
+ * Return the number of characters the string 's' will take on the screen,
+ * taking into account the size of a tab.
  */
     int
 linetabsize(s)
     char_u	*s;
 {
-    colnr_T	col = 0;
+    return linetabsize_col(0, s);
+}
+
+/*
+ * Like linetabsize(), but starting at column "startcol".
+ */
+    int
+linetabsize_col(startcol, s)
+    int		startcol;
+    char_u	*s;
+{
+    colnr_T	col = startcol;
 
     while (*s != NUL)
 	col += lbr_chartabsize_adv(&s, col);

@@ -50,6 +50,7 @@ EXTERN char_u	*LineWraps INIT(= NULL);	/* line wraps to next line */
  * ScreenLinesUC[] contains the Unicode for the character at this position, or
  * NUL when the character in ScreenLines[] is to be used (ASCII char).
  * The composing characters are to be drawn on top of the original character.
+ * ScreenLinesC[0][off] is only to be used when ScreenLinesUC[off] != 0.
  * Note: These three are only allocated when enc_utf8 is set!
  */
 EXTERN u8char_T	*ScreenLinesUC INIT(= NULL);	/* decoded UTF-8 characters */
@@ -103,6 +104,10 @@ EXTERN int	cmdline_star INIT(= FALSE);	/* cmdline is crypted */
 EXTERN int	exec_from_reg INIT(= FALSE);	/* executing register */
 
 EXTERN int	screen_cleared INIT(= FALSE);	/* screen has been cleared */
+
+#ifdef FEAT_CRYPT
+EXTERN int      use_crypt_method INIT(= 0);
+#endif
 
 /*
  * When '$' is included in 'cpoptions' option set:
@@ -842,13 +847,7 @@ EXTERN int* (*iconv_errno) (void);
 
 #ifdef FEAT_XIM
 # ifdef FEAT_GUI_GTK
-#  ifdef HAVE_GTK2
 EXTERN GtkIMContext	*xic INIT(= NULL);
-#  else
-EXTERN GdkICAttr	*xic_attr INIT(= NULL);
-EXTERN GdkIC		*xic INIT(= NULL);
-EXTERN char		*draw_feedback INIT(= NULL);
-#  endif
 /*
  * Start and end column of the preedit area in virtual columns from the start
  * of the text line.  When there is no preedit area they are set to MAXCOL.
@@ -1146,6 +1145,9 @@ EXTERN int	lcs_nbsp INIT(= NUL);
 EXTERN int	lcs_tab1 INIT(= NUL);
 EXTERN int	lcs_tab2 INIT(= NUL);
 EXTERN int	lcs_trail INIT(= NUL);
+#ifdef FEAT_CONCEAL
+EXTERN int	lcs_conceal INIT(= '-');
+#endif
 
 #if defined(FEAT_WINDOWS) || defined(FEAT_WILDMENU) || defined(FEAT_STL_OPT) \
 	|| defined(FEAT_FOLDING)
@@ -1341,6 +1343,11 @@ EXTERN disptick_T	display_tick INIT(= 0);
 EXTERN linenr_T		spell_redraw_lnum INIT(= 0);
 #endif
 
+#ifdef FEAT_CONCEAL
+/* Set when the cursor line needs to be redrawn. */
+EXTERN int		need_cursor_line_redraw INIT(= FALSE);
+#endif
+
 #ifdef ALT_X_INPUT
 /* we need to be able to go into the dispatch loop while processing a command
  * received via alternate input. However, we don't want to process another
@@ -1364,7 +1371,6 @@ EXTERN int netbeansFireChanges INIT(= 1); /* send buffer changes if != 0 */
 EXTERN int netbeansForcedQuit INIT(= 0);/* don't write modified files */
 EXTERN int netbeansReadFile INIT(= 1);	/* OK to read from disk if != 0 */
 EXTERN int netbeansSuppressNoLines INIT(= 0); /* skip "No lines in buffer" */
-EXTERN int usingNetbeans INIT(= 0);	/* set if -nb flag is used */
 #endif
 
 /*
@@ -1395,7 +1401,7 @@ EXTERN char_u e_fontset[]	INIT(= N_("E234: Unknown fontset: %s"));
 	|| defined(FEAT_GUI_PHOTON) || defined(FEAT_GUI_MSWIN)
 EXTERN char_u e_font[]		INIT(= N_("E235: Unknown font: %s"));
 #endif
-#if (defined(FEAT_GUI_X11) || defined(FEAT_GUI_GTK)) && !defined(HAVE_GTK2)
+#if defined(FEAT_GUI_X11) && !defined(FEAT_GUI_GTK)
 EXTERN char_u e_fontwidth[]	INIT(= N_("E236: Font \"%s\" is not fixed-width"));
 #endif
 EXTERN char_u e_internal[]	INIT(= N_("E473: Internal error"));
@@ -1408,15 +1414,20 @@ EXTERN char_u e_invexpr2[]	INIT(= N_("E15: Invalid expression: %s"));
 #endif
 EXTERN char_u e_invrange[]	INIT(= N_("E16: Invalid range"));
 EXTERN char_u e_invcmd[]	INIT(= N_("E476: Invalid command"));
-#if defined(UNIX) || defined(FEAT_SYN_HL)
+#if defined(UNIX) || defined(FEAT_SYN_HL) || defined(FEAT_SPELL)
 EXTERN char_u e_isadir2[]	INIT(= N_("E17: \"%s\" is a directory"));
 #endif
 #ifdef FEAT_LIBCALL
 EXTERN char_u e_libcall[]	INIT(= N_("E364: Library call failed for \"%s()\""));
 #endif
-#if defined(DYNAMIC_PERL) || defined(DYNAMIC_PYTHON) || defined(DYNAMIC_RUBY) \
-	|| defined(DYNAMIC_TCL) || defined(DYNAMIC_ICONV) \
-	|| defined(DYNAMIC_GETTEXT) || defined(DYNAMIC_MZSCHEME)
+#if defined(DYNAMIC_PERL) \
+	|| defined(DYNAMIC_PYTHON) || defined(DYNAMIC_PYTHON3) \
+	|| defined(DYNAMIC_RUBY) \
+	|| defined(DYNAMIC_TCL) \
+	|| defined(DYNAMIC_ICONV) \
+	|| defined(DYNAMIC_GETTEXT) \
+	|| defined(DYNAMIC_MZSCHEME) \
+	|| defined(DYNAMIC_LUA)
 EXTERN char_u e_loadlib[]	INIT(= N_("E370: Could not load library %s"));
 EXTERN char_u e_loadfunc[]	INIT(= N_("E448: Could not load library function %s"));
 #endif
@@ -1507,7 +1518,7 @@ EXTERN char_u e_screenmode[]	INIT(= N_("E359: Screen mode setting not supported"
 #endif
 EXTERN char_u e_scroll[]	INIT(= N_("E49: Invalid scroll size"));
 EXTERN char_u e_shellempty[]	INIT(= N_("E91: 'shell' option is empty"));
-#if defined(FEAT_SIGN_ICONS) && !defined(HAVE_GTK2)
+#if defined(FEAT_SIGN_ICONS) && !defined(FEAT_GUI_GTK)
 EXTERN char_u e_signdata[]	INIT(= N_("E255: Couldn't read in sign data!"));
 #endif
 EXTERN char_u e_swapclose[]	INIT(= N_("E72: Close error on swap file"));
@@ -1556,6 +1567,10 @@ EXTERN short disallow_gui	INIT(= FALSE);
 
 EXTERN char top_bot_msg[] INIT(= N_("search hit TOP, continuing at BOTTOM"));
 EXTERN char bot_top_msg[] INIT(= N_("search hit BOTTOM, continuing at TOP"));
+
+#ifdef FEAT_CRYPT
+EXTERN char need_key_msg[] INIT(= N_("Need encryption key for \"%s\""));
+#endif
 
 /*
  * Comms. with the session manager (XSMP)

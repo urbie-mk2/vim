@@ -135,7 +135,7 @@
 # ifdef FEAT_MBYTE
 #  define LANGMAP_ADJUST(c, condition) \
     do { \
-        if (*p_langmap && (condition) && !KeyStuffed && (c) >= 0) \
+	if (*p_langmap && (condition) && !KeyStuffed && (c) >= 0) \
 	{ \
 	    if ((c) < 256) \
 		c = langmap_mapchar[c]; \
@@ -146,8 +146,8 @@
 # else
 #  define LANGMAP_ADJUST(c, condition) \
     do { \
-        if (*p_langmap && (condition) && !KeyStuffed && (c) >= 0 && (c) < 256) \
-            c = langmap_mapchar[c]; \
+	if (*p_langmap && (condition) && !KeyStuffed && (c) >= 0 && (c) < 256) \
+	    c = langmap_mapchar[c]; \
     } while (0)
 # endif
 #else
@@ -225,21 +225,6 @@
 # else
 #  define mch_open_rw(n, f)	mch_open((n), (f), 0)
 # endif
-#endif
-
-/*
- * Encryption macros.  Mohsin Ahmed, mosh@sasi.com 98-09-24
- * Based on zip/crypt sources.
- */
-
-#ifdef FEAT_CRYPT
-
-/* encode byte c, using temp t.  Warning: c must not have side effects. */
-# define ZENCODE(c, t)  (t = decrypt_byte(), update_keys(c), t^(c))
-
-/* decode byte c in place */
-# define ZDECODE(c)   update_keys(c ^= decrypt_byte())
-
 #endif
 
 #ifdef STARTUPTIME

@@ -192,9 +192,6 @@ static int  spell_bad_len = 0;	/* length of located bad word */
 #endif
 static void stop_insert __ARGS((pos_T *end_insert_pos, int esc));
 static int  echeck_abbr __ARGS((int));
-#if 0
-static void replace_push_off __ARGS((int c));
-#endif
 static int  replace_pop __ARGS((void));
 static void replace_join __ARGS((int off));
 static void replace_pop_ins __ARGS((void));
@@ -224,7 +221,7 @@ static void ins_del __ARGS((void));
 static int  ins_bs __ARGS((int c, int mode, int *inserted_space_p));
 #ifdef FEAT_MOUSE
 static void ins_mouse __ARGS((int c));
-static void ins_mousescroll __ARGS((int up));
+static void ins_mousescroll __ARGS((int dir));
 #endif
 #if defined(FEAT_GUI_TABLINE) || defined(PROTO)
 static void ins_tabline __ARGS((int c));
@@ -375,6 +372,12 @@ edit(cmdchar, startln, count)
 # endif
 	apply_autocmds(EVENT_INSERTENTER, NULL, NULL, FALSE, curbuf);
     }
+#endif
+
+#ifdef FEAT_CONCEAL
+    /* Check if the cursor line needs redrawing before changing State.  If
+     * 'concealcursor' is "n" it needs to be redrawn without concealing. */
+    conceal_check_cursur_line();
 #endif
 
 #ifdef FEAT_MOUSE
@@ -698,6 +701,10 @@ edit(cmdchar, startln, count)
 	    do_check_scrollbind(TRUE);
 #endif
 
+#ifdef FEAT_CURSORBIND
+	if (curwin->w_p_crb)
+	    do_check_cursorbind();
+#endif
 	update_curswant();
 	old_topline = curwin->w_topline;
 #ifdef FEAT_DIFF
@@ -1102,11 +1109,19 @@ doESCkey:
 	    break;
 
 	case K_MOUSEDOWN: /* Default action for scroll wheel up: scroll up */
-	    ins_mousescroll(FALSE);
+	    ins_mousescroll(MSCR_DOWN);
 	    break;
 
 	case K_MOUSEUP:	/* Default action for scroll wheel down: scroll down */
-	    ins_mousescroll(TRUE);
+	    ins_mousescroll(MSCR_UP);
+	    break;
+
+	case K_MOUSELEFT: /* Scroll wheel left */
+	    ins_mousescroll(MSCR_LEFT);
+	    break;
+
+	case K_MOUSERIGHT: /* Scroll wheel right */
+	    ins_mousescroll(MSCR_RIGHT);
 	    break;
 #endif
 #ifdef FEAT_GUI_TABLINE
@@ -1277,7 +1292,7 @@ doESCkey:
 	    inserted_space = FALSE;
 	    break;
 
-#if defined(FEAT_DIGRAPHS) || defined (FEAT_INS_EXPAND)
+#if defined(FEAT_DIGRAPHS) || defined(FEAT_INS_EXPAND)
 	case Ctrl_K:	    /* digraph or keyword completion */
 # ifdef FEAT_INS_EXPAND
 	    if (ctrl_x_mode == CTRL_X_DICTIONARY)
@@ -1453,27 +1468,54 @@ force_cindent:
 ins_redraw(ready)
     int		ready UNUSED;	    /* not busy with something */
 {
+#ifdef FEAT_CONCEAL
+    linenr_T	conceal_old_cursor_line = 0;
+    linenr_T	conceal_new_cursor_line = 0;
+    int		conceal_update_lines = FALSE;
+#endif
+
     if (!char_avail())
     {
-#ifdef FEAT_AUTOCMD
+#if defined(FEAT_AUTOCMD) || defined(FEAT_CONCEAL)
 	/* Trigger CursorMoved if the cursor moved.  Not when the popup menu is
 	 * visible, the command might delete it. */
-	if (ready && has_cursormovedI()
-			     && !equalpos(last_cursormoved, curwin->w_cursor)
-# ifdef FEAT_INS_EXPAND
-			     && !pum_visible()
+	if (ready && (
+# ifdef FEAT_AUTOCMD
+		    has_cursormovedI()
 # endif
-			     )
+# if defined(FEAT_AUTOCMD) && defined(FEAT_CONCEAL)
+		    ||
+# endif
+# ifdef FEAT_CONCEAL
+		    curwin->w_p_cole > 0
+# endif
+		    )
+	    && !equalpos(last_cursormoved, curwin->w_cursor)
+# ifdef FEAT_INS_EXPAND
+	    && !pum_visible()
+# endif
+	   )
 	{
 # ifdef FEAT_SYN_HL
 	    /* Need to update the screen first, to make sure syntax
 	     * highlighting is correct after making a change (e.g., inserting
 	     * a "(".  The autocommand may also require a redraw, so it's done
 	     * again below, unfortunately. */
-	    if (syntax_present(curbuf) && must_redraw)
+	    if (syntax_present(curwin) && must_redraw)
 		update_screen(0);
 # endif
-	    apply_autocmds(EVENT_CURSORMOVEDI, NULL, NULL, FALSE, curbuf);
+# ifdef FEAT_AUTOCMD
+	    if (has_cursormovedI())
+		apply_autocmds(EVENT_CURSORMOVEDI, NULL, NULL, FALSE, curbuf);
+# endif
+# ifdef FEAT_CONCEAL
+	    if (curwin->w_p_cole > 0)
+	    {
+		conceal_old_cursor_line = last_cursormoved.lnum;
+		conceal_new_cursor_line = curwin->w_cursor.lnum;
+		conceal_update_lines = TRUE;
+	    }
+# endif
 	    last_cursormoved = curwin->w_cursor;
 	}
 #endif
@@ -1481,6 +1523,19 @@ ins_redraw(ready)
 	    update_screen(0);
 	else if (clear_cmdline || redraw_cmdline)
 	    showmode();		/* clear cmdline and show mode */
+# if defined(FEAT_CONCEAL)
+	if ((conceal_update_lines
+		&& (conceal_old_cursor_line != conceal_new_cursor_line
+		    || conceal_cursor_line(curwin)))
+		|| need_cursor_line_redraw)
+	{
+	    if (conceal_old_cursor_line != conceal_new_cursor_line)
+		update_single_line(curwin, conceal_old_cursor_line);
+	    update_single_line(curwin, conceal_new_cursor_line == 0
+			   ? curwin->w_cursor.lnum : conceal_new_cursor_line);
+	    curwin->w_valid &= ~VALID_CROW;
+	}
+# endif
 	showruler(FALSE);
 	setcursor();
 	emsg_on_display = FALSE;	/* may remove error message now */
@@ -1507,6 +1562,8 @@ ins_ctrl_v()
 #endif
 
     c = get_literal();
+    edit_unputchar();  /* when line fits in 'columns' the '^' is at the start
+			  of the next line and will not be redrawn */
 #ifdef FEAT_CMDL_INFO
     clear_showcmd();
 #endif
@@ -2960,7 +3017,7 @@ ins_compl_dictionaries(dict_start, pat, flags, thesaurus)
 		ptr = pat + 2;
 	    else
 		ptr = pat;
-	    spell_dump_compl(curbuf, ptr, regmatch.rm_ic, &dir, 0);
+	    spell_dump_compl(ptr, regmatch.rm_ic, &dir, 0);
 	}
 	else
 # endif
@@ -3292,19 +3349,6 @@ ins_compl_new_leader()
 	compl_restarting = FALSE;
     }
 
-#if 0   /* disabled, made CTRL-L, BS and typing char jump to original text. */
-    if (!compl_used_match)
-    {
-	/* Go to the original text, since none of the matches is inserted. */
-	if (compl_first_match->cp_prev != NULL
-		&& (compl_first_match->cp_prev->cp_flags & ORIGINAL_TEXT))
-	    compl_shown_match = compl_first_match->cp_prev;
-	else
-	    compl_shown_match = compl_first_match;
-	compl_curr_match = compl_shown_match;
-	compl_shows_dir = compl_direction;
-    }
-#endif
     compl_enter_selects = !compl_used_match;
 
     /* Show the popup menu with a different set of matches. */
@@ -3464,7 +3508,8 @@ ins_compl_prep(c)
 	edit_submode_extra = NULL;
 
     /* Ignore end of Select mode mapping and mouse scroll buttons. */
-    if (c == K_SELECT || c == K_MOUSEDOWN || c == K_MOUSEUP)
+    if (c == K_SELECT || c == K_MOUSEDOWN || c == K_MOUSEUP
+	    || c == K_MOUSELEFT || c == K_MOUSERIGHT)
 	return retval;
 
     /* Set "compl_get_longest" when finding the first matches. */
@@ -6273,12 +6318,12 @@ comp_textwidth(ff)
 #ifdef FEAT_SIGNS
 	if (curwin->w_buffer->b_signlist != NULL
 # ifdef FEAT_NETBEANS_INTG
-			    || usingNetbeans
+			    || netbeans_active()
 # endif
 		    )
 	    textwidth -= 1;
 #endif
-	if (curwin->w_p_nu)
+	if (curwin->w_p_nu || curwin->w_p_rnu)
 	    textwidth -= 8;
     }
     if (textwidth < 0)
@@ -7091,26 +7136,6 @@ replace_push_mb(p)
 }
 #endif
 
-#if 0
-/*
- * call replace_push(c) with replace_offset set to the first NUL.
- */
-    static void
-replace_push_off(c)
-    int	    c;
-{
-    char_u	*p;
-
-    p = replace_stack + replace_stack_nr;
-    for (replace_offset = 1; replace_offset < replace_stack_nr;
-							     ++replace_offset)
-	if (*--p == NUL)
-	    break;
-    replace_push(c);
-    replace_offset = 0;
-}
-#endif
-
 /*
  * Pop one item from the replace stack.
  * return -1 if stack empty
@@ -7505,7 +7530,8 @@ in_cinkeys(keytyped, when, line_is_empty)
 	    if (try_match && keytyped == ':')
 	    {
 		p = ml_get_curline();
-		if (cin_iscase(p) || cin_isscopedecl(p) || cin_islabel(30))
+		if (cin_iscase(p, FALSE) || cin_isscopedecl(p)
+							   || cin_islabel(30))
 		    return TRUE;
 		/* Need to get the line again after cin_islabel(). */
 		p = ml_get_curline();
@@ -7514,7 +7540,7 @@ in_cinkeys(keytyped, when, line_is_empty)
 			&& p[curwin->w_cursor.col - 2] == ':')
 		{
 		    p[curwin->w_cursor.col - 1] = ' ';
-		    i = (cin_iscase(p) || cin_isscopedecl(p)
+		    i = (cin_iscase(p, FALSE) || cin_isscopedecl(p)
 							  || cin_islabel(30));
 		    p = ml_get_curline();
 		    p[curwin->w_cursor.col - 1] = ':';
@@ -8326,9 +8352,7 @@ ins_del()
     {
 	temp = curwin->w_cursor.col;
 	if (!can_bs(BS_EOL)		/* only if "eol" included */
-		|| u_save((linenr_T)(curwin->w_cursor.lnum - 1),
-		    (linenr_T)(curwin->w_cursor.lnum + 2)) == FAIL
-		|| do_join(FALSE) == FAIL)
+		|| do_join(2, FALSE, TRUE) == FAIL)
 	    vim_beep();
 	else
 	    curwin->w_cursor.col = temp;
@@ -8509,7 +8533,7 @@ ins_bs(c, mode, inserted_space_p)
 			ptr[len - 1] = NUL;
 		}
 
-		(void)do_join(FALSE);
+		(void)do_join(2, FALSE, FALSE);
 		if (temp == NUL && gchar_cursor() != NUL)
 		    inc_cursor();
 	    }
@@ -8808,8 +8832,8 @@ ins_mouse(c)
 }
 
     static void
-ins_mousescroll(up)
-    int		up;
+ins_mousescroll(dir)
+    int		dir;
 {
     pos_T	tpos;
 # if defined(FEAT_WINDOWS)
@@ -8847,10 +8871,27 @@ ins_mousescroll(up)
 	    )
 # endif
     {
-	if (mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
-	    scroll_redraw(up, (long)(curwin->w_botline - curwin->w_topline));
+	if (dir == MSCR_DOWN || dir == MSCR_UP)
+	{
+	    if (mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
+		scroll_redraw(dir,
+			(long)(curwin->w_botline - curwin->w_topline));
+	    else
+		scroll_redraw(dir, 3L);
+	}
+#ifdef FEAT_GUI
 	else
-	    scroll_redraw(up, 3L);
+	{
+	    int val, step = 6;
+
+	    if (mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))
+		step = W_WIDTH(curwin);
+	    val = curwin->w_leftcol + (dir == MSCR_RIGHT ? -step : step);
+	    if (val < 0)
+		val = 0;
+	    gui_do_horiz_scroll(val, TRUE);
+	}
+#endif
 # ifdef FEAT_INS_EXPAND
 	did_scroll = TRUE;
 # endif
@@ -8934,7 +8975,7 @@ ins_horscroll()
 
     undisplay_dollar();
     tpos = curwin->w_cursor;
-    if (gui_do_horiz_scroll())
+    if (gui_do_horiz_scroll(scrollbar_value, FALSE))
     {
 	start_arrow(&tpos);
 # ifdef FEAT_CINDENT
@@ -9437,10 +9478,9 @@ ins_tab()
 			replace_join(repl_off);
 	    }
 #ifdef FEAT_NETBEANS_INTG
-	    if (usingNetbeans)
+	    if (netbeans_active())
 	    {
-		netbeans_removed(curbuf, fpos.lnum, cursor->col,
-							       (long)(i + 1));
+		netbeans_removed(curbuf, fpos.lnum, cursor->col, (long)(i + 1));
 		netbeans_inserted(curbuf, fpos.lnum, cursor->col,
 							   (char_u *)"\t", 1);
 	    }
@@ -9582,6 +9622,9 @@ ins_digraph()
     c = plain_vgetc();
     --no_mapping;
     --allow_keys;
+    edit_unputchar();  /* when line fits in 'columns' the '?' is at the start
+			  of the next line and will not be redrawn */
+
     if (IS_SPECIAL(c) || mod_mask)	    /* special key */
     {
 #ifdef FEAT_CMDL_INFO
@@ -9614,6 +9657,8 @@ ins_digraph()
 	cc = plain_vgetc();
 	--no_mapping;
 	--allow_keys;
+	edit_unputchar();  /* when line fits in 'columns' the '?' is at the
+			      start of the next line and will not be redrawn */
 	if (cc != ESC)
 	{
 	    AppendToRedobuff((char_u *)CTRL_V_STR);
@@ -9624,7 +9669,6 @@ ins_digraph()
 	    return c;
 	}
     }
-    edit_unputchar();
 #ifdef FEAT_CMDL_INFO
     clear_showcmd();
 #endif

@@ -170,7 +170,13 @@ static void ruby_vim_init(void);
 #define rb_str_cat			dll_rb_str_cat
 #define rb_str_concat			dll_rb_str_concat
 #define rb_str_new			dll_rb_str_new
-#define rb_str_new2			dll_rb_str_new2
+#ifdef rb_str_new2
+/* Ruby may #define rb_str_new2 to use rb_str_new_cstr. */
+# define need_rb_str_new_cstr 1
+# define rb_str_new_cstr		dll_rb_str_new_cstr
+#else
+# define rb_str_new2			dll_rb_str_new2
+#endif
 #if defined(DYNAMIC_RUBY_VER) && DYNAMIC_RUBY_VER >= 18
 # define rb_string_value_ptr		dll_rb_string_value_ptr
 # define rb_float_new			dll_rb_float_new
@@ -202,12 +208,12 @@ static void ruby_vim_init(void);
  * Pointers for dynamic link
  */
 static VALUE (*dll_rb_assoc_new) (VALUE, VALUE);
-static VALUE *dll_rb_cFalseClass;
-static VALUE *dll_rb_cFixnum;
-static VALUE *dll_rb_cNilClass;
+VALUE *dll_rb_cFalseClass;
+VALUE *dll_rb_cFixnum;
+VALUE *dll_rb_cNilClass;
 static VALUE *dll_rb_cObject;
-static VALUE *dll_rb_cSymbol;
-static VALUE *dll_rb_cTrueClass;
+VALUE *dll_rb_cSymbol;
+VALUE *dll_rb_cTrueClass;
 static void (*dll_rb_check_type) (VALUE,int);
 static VALUE (*dll_rb_class_path) (VALUE);
 static VALUE (*dll_rb_data_object_alloc) (VALUE, void*, RUBY_DATA_FUNC, RUBY_DATA_FUNC);
@@ -244,7 +250,12 @@ static char *(*dll_rb_str2cstr) (VALUE,int*);
 static VALUE (*dll_rb_str_cat) (VALUE, const char*, long);
 static VALUE (*dll_rb_str_concat) (VALUE, VALUE);
 static VALUE (*dll_rb_str_new) (const char*, long);
+#ifdef need_rb_str_new_cstr
+/* Ruby may #define rb_str_new2 to use rb_str_new_cstr. */
+static VALUE (*dll_rb_str_new_cstr) (const char*);
+#else
 static VALUE (*dll_rb_str_new2) (const char*);
+#endif
 #ifdef RUBY19_OR_LATER
 static VALUE (*dll_rb_errinfo) (void);
 #else
@@ -276,11 +287,11 @@ static void (*ruby_init_stack)(VALUE*);
 #endif
 
 #ifdef RUBY19_OR_LATER
-static SIGNED_VALUE rb_num2long_stub(VALUE x)
+SIGNED_VALUE rb_num2long_stub(VALUE x)
 {
     return dll_rb_num2long(x);
 }
-static VALUE rb_int2big_stub(SIGNED_VALUE x)
+VALUE rb_int2big_stub(SIGNED_VALUE x)
 {
     return dll_rb_int2big(x);
 }
@@ -340,7 +351,11 @@ static struct
     {"rb_str_cat", (RUBY_PROC*)&dll_rb_str_cat},
     {"rb_str_concat", (RUBY_PROC*)&dll_rb_str_concat},
     {"rb_str_new", (RUBY_PROC*)&dll_rb_str_new},
+#ifdef need_rb_str_new_cstr
+    {"rb_str_new_cstr", (RUBY_PROC*)&dll_rb_str_new_cstr},
+#else
     {"rb_str_new2", (RUBY_PROC*)&dll_rb_str_new2},
+#endif
 #ifdef RUBY19_OR_LATER
     {"rb_errinfo", (RUBY_PROC*)&dll_rb_errinfo},
 #else
@@ -594,10 +609,12 @@ static int ensure_ruby_initialized(void)
 	    char *argv[] = {"gvim.exe"};
 	    NtInitialize(&argc, &argv);
 #endif
+	    {
 #ifdef RUBY19_OR_LATER
-	    RUBY_INIT_STACK;
+		RUBY_INIT_STACK;
 #endif
-	    ruby_init();
+		ruby_init();
+	    }
 #ifdef RUBY19_OR_LATER
 	    ruby_script("vim-ruby");
 #endif

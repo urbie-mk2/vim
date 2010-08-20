@@ -635,8 +635,8 @@ gui_x11_expose_cb(w, dud, event, dum)
     gui_mch_update();
 }
 
-#if (defined(FEAT_NETBEANS_INTG) || defined(FEAT_SUN_WORKSHOP)) \
-	|| defined(PROTO)
+#if ((defined(FEAT_NETBEANS_INTG) || defined(FEAT_SUN_WORKSHOP)) \
+	&& defined(FEAT_GUI_MOTIF)) || defined(PROTO)
 /*
  * This function fills in the XRectangle object with the current x,y
  * coordinates and height, width so that an XtVaSetValues to the same shell of
@@ -709,8 +709,8 @@ gui_x11_resize_window_cb(w, dud, event, dum)
 	workshop_frame_moved(rec.x, rec.y, rec.width, rec.height);
     }
 #endif
-#ifdef FEAT_NETBEANS_INTG
-    if (usingNetbeans)
+#if defined(FEAT_NETBEANS_INTG) && defined(FEAT_GUI_MOTIF)
+    if (netbeans_active())
     {
 	XRectangle  rec;
 
@@ -1162,9 +1162,9 @@ gui_x11_mouse_cb(w, dud, event, dum)
 /* ARGSUSED */
     static void
 gui_x11_sniff_request_cb(closure, source, id)
-    XtPointer	closure;
-    int		*source;
-    XtInputId	*id;
+    XtPointer	closure UNUSED;
+    int		*source UNUSED;
+    XtInputId	*id UNUSED;
 {
     static char_u bytes[3] = {CSI, (int)KS_EXTRA, (int)KE_SNIFF};
 
@@ -1253,7 +1253,6 @@ gui_mch_prepare(argc, argv)
 #ifdef FEAT_NETBEANS_INTG
 	    if (strncmp("-nb", argv[arg], 3) == 0)
 	{
-	    usingNetbeans++;
 	    gui.dofork = FALSE;	/* don't fork() when starting GUI */
 	    netbeansArg = argv[arg];
 	    mch_memmove(&argv[arg], &argv[arg + 1],
@@ -3393,17 +3392,6 @@ gui_x11_get_last_mouse_event()
  * to provide room for the bitmap! */
 # define SIGN_WIDTH (gui.char_width * 2)
 
-#if 0	/* not used */
-    void
-gui_mch_clearsign(row)
-    int		row;
-{
-    if (gui.in_use)
-	XClearArea(gui.dpy, gui.wid, 0, TEXT_Y(row) - gui.char_height,
-		SIGN_WIDTH, gui.char_height, FALSE);
-}
-#endif
-
     void
 gui_mch_drawsign(row, col, typenr)
     int		row;
@@ -3455,7 +3443,7 @@ gui_mch_register_sign(signfile)
 	{
 	    /* Sign width is fixed at two columns now.
 	    if (sign->width > gui.sign_width)
-	        gui.sign_width = sign->width + 8; */
+		gui.sign_width = sign->width + 8; */
 	}
 	else
 	    EMSG(_(e_signdata));
